@@ -234,14 +234,9 @@ func (t *Tensor) T() *Tensor {
 	}
 	r, c := t.shape[nd-2], t.shape[nd-1]
 	batch := len(t.data) / (r * c)
-	out := make([]float64, len(t.data))
+	out := make([]float64, 0, len(t.data))
 	for b := 0; b < batch; b++ {
-		src, dst := t.data[b*r*c:(b+1)*r*c], out[b*r*c:(b+1)*r*c]
-		for i := 0; i < r; i++ {
-			for j := 0; j < c; j++ {
-				dst[j*r+i] = src[i*c+j]
-			}
-		}
+		out = append(out, transpose2d(t.data[b*r*c:(b+1)*r*c], r, c)...)
 	}
 	shape := append([]int(nil), t.shape...)
 	shape[nd-2], shape[nd-1] = c, r

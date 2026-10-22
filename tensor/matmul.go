@@ -16,8 +16,22 @@ func matmul(a, b []float64, m, k, n int) []float64 {
 	rows := func(lo, hi int) {
 		for i := lo; i < hi; i++ {
 			ci := c[i*n : (i+1)*n]
-			for p := 0; p < k; p++ {
-				aip := a[i*k+p]
+			ai := a[i*k : (i+1)*k]
+			p := 0
+			// Fold four rows of b into ci per pass to cut loads and stores of ci.
+			for ; p+4 <= k; p += 4 {
+				a0, a1, a2, a3 := ai[p], ai[p+1], ai[p+2], ai[p+3]
+				b0 := b[p*n : (p+1)*n]
+				b1 := b[(p+1)*n : (p+2)*n][:len(b0)]
+				b2 := b[(p+2)*n : (p+3)*n][:len(b0)]
+				b3 := b[(p+3)*n : (p+4)*n][:len(b0)]
+				ci := ci[:len(b0)]
+				for j, v := range b0 {
+					ci[j] += a0*v + a1*b1[j] + a2*b2[j] + a3*b3[j]
+				}
+			}
+			for ; p < k; p++ {
+				aip := ai[p]
 				bp := b[p*n : (p+1)*n]
 				for j := range ci {
 					ci[j] += aip * bp[j]
@@ -42,4 +56,15 @@ func matmul(a, b []float64, m, k, n int) []float64 {
 	}
 	wg.Wait()
 	return c
+}
+
+// transpose2d returns the transpose of the row-major (r, c) matrix a.
+func transpose2d(a []float64, r, c int) []float64 {
+	out := make([]float64, len(a))
+	for i := 0; i < r; i++ {
+		for j := 0; j < c; j++ {
+			out[j*r+i] = a[i*c+j]
+		}
+	}
+	return out
 }

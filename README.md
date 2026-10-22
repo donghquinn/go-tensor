@@ -23,19 +23,24 @@ for epoch := 0; epoch < 500; epoch++ {
 
 ```sh
 go run ./examples/xor                # 2-8-2 MLP learns XOR
-go run ./examples/mnist -epochs 3    # 784-128-10 MLP on MNIST
+go run ./examples/mnist -model cnn   # 2-layer CNN on MNIST
+go run ./examples/mnist -model mlp   # 784-128-10 MLP on MNIST
 ```
 
 The MNIST example downloads the dataset into `data/mnist` (checksum-verified),
-reaches ~96.8% test accuracy in 3 epochs at about 1.5 s per epoch on an Apple
-M-series laptop, then saves the model and reloads it.
+trains for 3 epochs, then saves the model and reloads it. On an Apple M5:
+
+| Model | Test accuracy (3 epochs) | Time per epoch |
+|-------|--------------------------|----------------|
+| CNN (conv 16 → conv 32 → fc 128, dropout) | 98.78% | ~26 s |
+| MLP (784 → 128 → 10) | 96.75% | ~1.2 s |
 
 ## Packages
 
 | Package  | PyTorch equivalent      | Contents |
 |----------|-------------------------|----------|
-| `tensor` | `torch`, `torch.autograd` | `Tensor`, creation (`New`, `Zeros`, `Randn`, …), broadcasting element-wise ops, reductions, `MatMul`, `Reshape`/`T`, `LogSoftmax`, `Backward`, `NoGrad`, `CustomOp` |
-| `nn`     | `torch.nn`              | `Module`, `Linear`, `Sequential`, `Flatten`, activations, `MSELoss`, `CrossEntropyLoss`, `BCELoss`, `Save`/`Load` |
+| `tensor` | `torch`, `torch.autograd` | `Tensor`, creation (`New`, `Zeros`, `Randn`, …), broadcasting element-wise ops, reductions, `MatMul`, `Conv2d`, `MaxPool2d`, `Reshape`/`T`, `LogSoftmax`, `Backward`, `NoGrad`, `CustomOp` |
+| `nn`     | `torch.nn`              | `Module`, `Linear`, `Conv2d`, `MaxPool2d`, `Dropout`, `Sequential`, `Flatten`, activations, `Train`/`Eval`, `MSELoss`, `CrossEntropyLoss`, `BCELoss`, `Save`/`Load` |
 | `optim`  | `torch.optim`           | `SGD` (momentum, weight decay), `Adam` |
 | `data`   | `torch.utils.data`      | `Dataset`, `TensorDataset`, `DataLoader` (batching, shuffling) |
 | `datasets/mnist` | `torchvision.datasets.MNIST` | Download, verify and load MNIST |
@@ -53,6 +58,7 @@ M-series laptop, then saves the model and reloads it.
 | `with torch.no_grad():` | `tensor.NoGrad(func() { ... })` |
 | `torch.manual_seed(0)` | `tensor.ManualSeed(0)` |
 | `torch.save(model.state_dict(), p)` | `nn.SaveFile(p, model)` |
+| `model.train()` / `model.eval()` | `nn.Train(model)` / `nn.Eval(model)` |
 | `for x, y in loader:` | `for loader.Next() { x, y := loader.Batch() }` |
 
 Custom differentiable ops work like `torch.autograd.Function`: compute the forward
@@ -62,7 +68,8 @@ result yourself and pass a backward closure to `tensor.CustomOp`.
 
 - Data is `float64`, stored contiguously in row-major order.
 - Shape errors panic, like out-of-range slice indexing.
-- `MatMul` splits rows across goroutines for large matrices.
+- `MatMul` splits rows across goroutines for large matrices; `Conv2d` lowers to
+  `MatMul` via im2col, so convolutions use every core too.
 - Every differentiable op is checked against finite differences in `tensor/tensor_test.go`.
 
 ## Roadmap
@@ -70,6 +77,7 @@ result yourself and pass a backward closure to `tensor.CustomOp`.
 - [ ] Generic element types (`float32`, `float16`) via Go generics
 - [ ] Strided views (zero-copy `Transpose`, `Slice`, `Expand`)
 - [ ] Batched `MatMul`, `Concat`, slicing
-- [ ] `Conv2d`, `MaxPool2d`, `BatchNorm`, `Dropout`, `Embedding`, train/eval modes
+- [x] `Conv2d`, `MaxPool2d`, `Dropout`, train/eval modes
+- [ ] `BatchNorm`, `Embedding`, `AvgPool2d`
 - [ ] SIMD / BLAS backend, then GPU (Metal, CUDA)
 - [x] `DataLoader`, model save/load, MNIST example

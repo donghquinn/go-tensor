@@ -1,6 +1,7 @@
-// Command mnist trains a multilayer perceptron on the MNIST handwritten digits.
+// Command mnist trains a convolutional network or a multilayer perceptron on
+// the MNIST handwritten digits.
 //
-//	go run ./examples/mnist -epochs 3
+//	go run ./examples/mnist -model cnn -epochs 3
 package main
 
 import (
@@ -18,14 +19,19 @@ import (
 )
 
 func main() {
+	arch := flag.String("model", "cnn", "architecture: cnn or mlp")
 	root := flag.String("data", "data/mnist", "directory for the MNIST files (downloaded if missing)")
 	epochs := flag.Int("epochs", 3, "number of training epochs")
 	batchSize := flag.Int("batch", 64, "mini-batch size")
 	lr := flag.Float64("lr", 1e-3, "Adam learning rate")
-	out := flag.String("save", "", "where to save the trained model (default: <data>/mlp.gotn)")
+	out := flag.String("save", "", "where to save the trained model (default: <data>/<model>.gotn)")
 	flag.Parse()
 	if *out == "" {
-		*out = filepath.Join(*root, "mlp.gotn")
+		*out = filepath.Join(*root, *arch+".gotn")
+	}
+	newModel, ok := models[*arch]
+	if !ok {
+		log.Fatalf("unknown model %q (want cnn or mlp)", *arch)
 	}
 
 	tensor.ManualSeed(0)
@@ -47,6 +53,7 @@ func main() {
 	for epoch := 1; epoch <= *epochs; epoch++ {
 		start := time.Now()
 		total, batches := 0.0, 0
+		nn.Train(model)
 		for loader.Next() {
 			x, y := loader.Batch()
 			loss := nn.CrossEntropyLoss(model.Forward(x), y)
@@ -72,16 +79,35 @@ func main() {
 	fmt.Printf("saved model to %s; reloaded copy scores %.2f%%\n", *out, 100*accuracy(restored, test))
 }
 
-func newModel() *nn.Sequential {
-	return nn.NewSequential(
-		nn.NewFlatten(),
-		nn.NewLinear(28*28, 128),
-		nn.NewReLU(),
-		nn.NewLinear(128, 10),
-	)
+var models = map[string]func() nn.Module{
+	// 1x28x28 -> 16x14x14 -> 32x7x7 -> 128 -> 10
+	"cnn": func() nn.Module {
+		return nn.NewSequential(
+			nn.NewConv2d(1, 16, 3, 1, 1),
+			nn.NewReLU(),
+			nn.NewMaxPool2d(2, 0),
+			nn.NewConv2d(16, 32, 3, 1, 1),
+			nn.NewReLU(),
+			nn.NewMaxPool2d(2, 0),
+			nn.NewFlatten(),
+			nn.NewDropout(0.25),
+			nn.NewLinear(32*7*7, 128),
+			nn.NewReLU(),
+			nn.NewLinear(128, 10),
+		)
+	},
+	"mlp": func() nn.Module {
+		return nn.NewSequential(
+			nn.NewFlatten(),
+			nn.NewLinear(28*28, 128),
+			nn.NewReLU(),
+			nn.NewLinear(128, 10),
+		)
+	},
 }
 
 func accuracy(model nn.Module, ds data.Dataset) float64 {
+	nn.Eval(model)
 	correct := 0
 	tensor.NoGrad(func() {
 		loader := data.NewDataLoader(ds, 1000, false)

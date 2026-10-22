@@ -86,3 +86,49 @@ func TestSaveLoad(t *testing.T) {
 		t.Fatal("expected shape mismatch error")
 	}
 }
+
+func TestDropoutModes(t *testing.T) {
+	tensor.ManualSeed(0)
+	d := nn.NewDropout(0.5)
+	model := nn.NewSequential(d)
+	x := tensor.Ones(1000)
+
+	out := model.Forward(x).Data()
+	zeros := 0
+	for _, v := range out {
+		if v == 0 {
+			zeros++
+		} else if v != 2 {
+			t.Fatalf("kept value %v, want 2 (scaled by 1/(1-p))", v)
+		}
+	}
+	if zeros < 400 || zeros > 600 {
+		t.Fatalf("dropped %d of 1000, want about 500", zeros)
+	}
+
+	nn.Eval(model)
+	if got := model.Forward(x); got != x {
+		t.Fatal("dropout in eval mode should return its input unchanged")
+	}
+	nn.Train(model)
+	if got := model.Forward(x); got == x {
+		t.Fatal("dropout did not return to training mode")
+	}
+}
+
+func TestConvNetForwardShape(t *testing.T) {
+	model := nn.NewSequential(
+		nn.NewConv2d(1, 4, 3, 1, 1),
+		nn.NewReLU(),
+		nn.NewMaxPool2d(2, 0),
+		nn.NewFlatten(),
+		nn.NewLinear(4*4*4, 3),
+	)
+	out := model.Forward(tensor.Randn(2, 1, 8, 8))
+	if s := out.Shape(); len(s) != 2 || s[0] != 2 || s[1] != 3 {
+		t.Fatalf("output shape %v, want [2 3]", s)
+	}
+	if n := len(model.Parameters()); n != 4 {
+		t.Fatalf("%d parameters, want 4", n)
+	}
+}

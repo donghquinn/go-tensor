@@ -35,15 +35,57 @@ trains for 3 epochs, then saves the model and reloads it. On an Apple M5:
 | CNN (conv 16 → conv 32 → fc 128, dropout) | 98.78% | ~26 s |
 | MLP (784 → 128 → 10) | 96.75% | ~1.2 s |
 
+## Loading pretrained weights
+
+`weights.Load` reads PyTorch, safetensors, ONNX, NumPy and GGUF files into a
+`state_dict`-style map, and `nn.LoadStateDict` copies it into a model. Parameter
+names follow PyTorch (`0.weight`, `3.bias`, …), so a model saved in Python loads
+straight into the same architecture built in Go:
+
+```python
+# Python
+model = nn.Sequential(nn.Conv2d(1, 16, 3, 1, 1), nn.ReLU(), nn.MaxPool2d(2),
+                      nn.Flatten(), nn.Linear(16 * 14 * 14, 10))
+torch.save(model.state_dict(), "model.pth")   # or save_file(...), torch.onnx.export(...)
+```
+
+```go
+// Go
+model := nn.NewSequential(nn.NewConv2d(1, 16, 3, 1, 1), nn.NewReLU(), nn.NewMaxPool2d(2, 0),
+	nn.NewFlatten(), nn.NewLinear(16*14*14, 10))
+sd, err := weights.Load("model.pth") // format detected from the file contents
+if err != nil { ... }
+if err := nn.LoadStateDict(model, sd, true); err != nil { ... } // strict, like PyTorch
+```
+
+| Format | Package | Read | Write | Notes |
+|--------|---------|------|-------|-------|
+| PyTorch `.pth` / `.pt` / `.bin` | `weights/pth` | ✓ | | `torch.save` zip format (PyTorch ≥ 1.6), nested checkpoints, strided views, TorchScript archives |
+| safetensors | `weights/safetensors` | ✓ | ✓ | All integer/float dtypes incl. F16/BF16; metadata |
+| ONNX | `weights/onnx` | ✓ | | Graph initializers, raw and typed fields, external data files |
+| NumPy `.npy` / `.npz` | `weights/numpy` | ✓ | ✓ | Fortran order, big-endian, compressed archives |
+| GGUF | `weights/gguf` | ✓ | | F32/F16/BF16/F64/ints, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q4_K, Q5_K, Q6_K; metadata |
+
+**Safe by construction.** `torch.load` without `weights_only=True` can run arbitrary
+code from a file. The Go pickle reader never imports or calls anything: it
+rebuilds tensors through a fixed allowlist and turns every other object into
+inert data. All parsers bound allocations by the real file size and are fuzzed.
+
+**Verified against the reference libraries.** `weights/testdata/gen_fixtures.py`
+writes every fixture with torch, safetensors, onnx, numpy and gguf-py and records
+their values. Every dtype and quantization type loads bit-exactly, and a PyTorch
+CNN loaded from each of the six files reproduces PyTorch's outputs in Go.
+
 ## Packages
 
 | Package  | PyTorch equivalent      | Contents |
 |----------|-------------------------|----------|
 | `tensor` | `torch`, `torch.autograd` | `Tensor`, creation (`New`, `Zeros`, `Randn`, …), broadcasting element-wise ops, reductions, `MatMul`, `Conv2d`, `MaxPool2d`, `Reshape`/`T`, `LogSoftmax`, `Backward`, `NoGrad`, `CustomOp` |
-| `nn`     | `torch.nn`              | `Module`, `Linear`, `Conv2d`, `MaxPool2d`, `Dropout`, `Sequential`, `Flatten`, activations, `Train`/`Eval`, `MSELoss`, `CrossEntropyLoss`, `BCELoss`, `Save`/`Load` |
+| `nn`     | `torch.nn`              | `Module`, `Linear`, `Conv2d`, `MaxPool2d`, `Dropout`, `Sequential`, `Flatten`, activations, `Train`/`Eval`, `StateDict`/`LoadStateDict`, `MSELoss`, `CrossEntropyLoss`, `BCELoss`, `Save`/`Load` |
 | `optim`  | `torch.optim`           | `SGD` (momentum, weight decay), `Adam` |
 | `data`   | `torch.utils.data`      | `Dataset`, `TensorDataset`, `DataLoader` (batching, shuffling) |
 | `datasets/mnist` | `torchvision.datasets.MNIST` | Download, verify and load MNIST |
+| `weights` | `torch.load`, `safetensors`, `onnx`, `gguf` | `Load` / `Detect` for every format below; one sub-package per format |
 
 ## PyTorch → go-tensor
 
@@ -57,7 +99,10 @@ trains for 3 epochs, then saves the model and reloads it. On an Apple M5:
 | `x.grad` | `x.Grad()` |
 | `with torch.no_grad():` | `tensor.NoGrad(func() { ... })` |
 | `torch.manual_seed(0)` | `tensor.ManualSeed(0)` |
-| `torch.save(model.state_dict(), p)` | `nn.SaveFile(p, model)` |
+| `torch.load(p)` | `weights.Load(p)` |
+| `model.load_state_dict(sd)` | `nn.LoadStateDict(model, sd, true)` |
+| `model.state_dict()` | `nn.StateDict(model)` |
+| `save_file(model.state_dict(), p)` | `safetensors.Save(p, nn.StateDict(model), safetensors.F32, nil)` |
 | `model.train()` / `model.eval()` | `nn.Train(model)` / `nn.Eval(model)` |
 | `for x, y in loader:` | `for x, y := range loader.All() { ... }` |
 
@@ -83,8 +128,14 @@ result yourself and pass a backward closure to `tensor.CustomOp`.
 - **`float64` only.** Twice the memory and half the SIMD throughput of `float32`.
 - **Copies instead of views.** `T` and broadcasting copy data, and there is no
   general slicing yet (only `Index` along the first dimension).
-- **Positional checkpoints.** `nn.Save`/`nn.Load` match parameters by position in
-  `Parameters()`, not by name, so the architecture must be rebuilt identically.
+- **Weights are materialized as `float64`.** Loading reads every tensor into
+  memory at once; there is no memory-mapping or lazy loading, and GGUF tensors
+  grow 4× (F16) to ~14× (4-bit quants), so multi-billion-parameter LLMs are out of reach.
+- **Weights, not graphs.** ONNX and TorchScript files contribute their tensors
+  only; the Go model must be built to match. Keras `.h5`/`.keras` (HDF5),
+  TensorFlow checkpoints, and legacy (pre-1.6) `torch.save` files are unsupported.
+- **`nn.Save`/`nn.Load` are positional.** Prefer `safetensors.Save` with
+  `nn.StateDict`, which stores names and opens in Python.
 - **Process-wide `NoGrad`.** It is a global switch, not per goroutine.
 
 ## Roadmap
@@ -104,7 +155,8 @@ written afterwards:
    - [ ] Batched `MatMul`, `Concat`, slicing
    - [ ] Attention / transformer blocks
 4. **Ecosystem**
-   - [ ] Named `state_dict`-style checkpoints
+   - [ ] Memory-mapped / lazy weight loading, keeping quantized tensors packed
+   - [ ] Keras HDF5, other GGUF quantizations (Q2_K, Q3_K, IQ*)
    - [ ] More datasets (Fashion-MNIST, CIFAR-10)
 
 Done:
@@ -112,3 +164,4 @@ Done:
 - [x] Autograd engine, broadcasting, `Linear`, `SGD`, `Adam`
 - [x] `DataLoader` with Go iterators, model save/load, MNIST example
 - [x] `Conv2d`, `MaxPool2d`, `Dropout`, train/eval modes
+- [x] Named state dicts; loading PyTorch, safetensors, ONNX, NumPy and GGUF weights

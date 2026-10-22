@@ -1,6 +1,7 @@
 package nn_test
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/donghquinn/go-tensor/nn"
@@ -58,4 +59,30 @@ func abs(x float64) float64 {
 		return -x
 	}
 	return x
+}
+
+func TestSaveLoad(t *testing.T) {
+	tensor.ManualSeed(0)
+	src := nn.NewSequential(nn.NewLinear(3, 4), nn.NewReLU(), nn.NewLinear(4, 2))
+	var buf bytes.Buffer
+	if err := nn.Save(&buf, src); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := nn.NewSequential(nn.NewLinear(3, 4), nn.NewReLU(), nn.NewLinear(4, 2))
+	if err := nn.Load(bytes.NewReader(buf.Bytes()), dst); err != nil {
+		t.Fatal(err)
+	}
+	x := tensor.Randn(5, 3)
+	a, b := src.Forward(x).Data(), dst.Forward(x).Data()
+	for i := range a {
+		if a[i] != b[i] {
+			t.Fatalf("outputs differ after load: %v vs %v", a, b)
+		}
+	}
+
+	wrong := nn.NewSequential(nn.NewLinear(3, 5), nn.NewReLU(), nn.NewLinear(5, 2))
+	if err := nn.Load(bytes.NewReader(buf.Bytes()), wrong); err == nil {
+		t.Fatal("expected shape mismatch error")
+	}
 }

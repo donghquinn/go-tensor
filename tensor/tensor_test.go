@@ -69,6 +69,8 @@ func TestGradients(t *testing.T) {
 		{"Mean", func(x ...*Tensor) *Tensor { return x[0].Mul(x[0]).Mean() }, []*Tensor{Randn(3, 4)}},
 		{"LogSoftmax", func(x ...*Tensor) *Tensor { return x[0].LogSoftmax().Mul(x[1]) }, []*Tensor{Randn(3, 4), Randn(3, 4)}},
 		{"Pick", func(x ...*Tensor) *Tensor { return x[0].Pick([]int{2, 0, 1}).Pow(2) }, []*Tensor{Randn(3, 4)}},
+		{"Index", func(x ...*Tensor) *Tensor { return x[0].Index(1).Pow(2) }, []*Tensor{Randn(3, 2, 2)}},
+		{"Stack", func(x ...*Tensor) *Tensor { return Stack([]*Tensor{x[0], x[1].Exp()}).Mul(x[0]) }, []*Tensor{Randn(3), Randn(3)}},
 		{"reuse", func(x ...*Tensor) *Tensor { return x[0].Mul(x[0]).Add(x[0].Exp()) }, []*Tensor{Randn(4)}},
 	}
 	for _, c := range cases {

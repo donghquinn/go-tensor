@@ -17,7 +17,7 @@ func TestReadIDX(t *testing.T) {
 	if s := x.Shape(); len(s) != 4 || s[0] != 2 || s[1] != 1 || s[2] != 2 || s[3] != 3 {
 		t.Fatalf("shape = %v, want [2 1 2 3]", s)
 	}
-	if x.At(0, 0, 0, 1) != 1 || x.At(0, 0, 0, 2) != 0.2 || x.At(1, 0, 1, 2) != 1 {
+	if x.At(0, 0, 0, 1) != 1 || x.At(0, 0, 0, 2) != float64(float32(0.2)) || x.At(1, 0, 1, 2) != 1 {
 		t.Fatalf("unexpected pixels %v", x)
 	}
 

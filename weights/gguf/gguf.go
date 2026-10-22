@@ -207,9 +207,9 @@ func readTensor(f *os.File, dataStart int64, ti tensorInfo) (*tensor.Tensor, err
 		}
 	}
 	if len(ti.shape) == 0 {
-		return tensor.Scalar(data[0]), nil
+		return tensor.FromFloat64(data[:1]).Reshape(), nil
 	}
-	return tensor.New(data, ti.shape...), nil
+	return tensor.FromFloat64(data, ti.shape...), nil
 }
 
 // header reads little-endian GGUF header fields, remembering the first error.

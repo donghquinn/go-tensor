@@ -27,7 +27,7 @@ func TestExternalDataMatchesEmbedded(t *testing.T) {
 	}
 	want := map[string]weighttest.Entry{}
 	for k, v := range embedded {
-		want[k] = weighttest.Entry{Shape: v.Shape(), Values: v.Data()}
+		want[k] = weighttest.Entry{Shape: v.Shape(), Values: v.Float64s()}
 	}
 	weighttest.Check(t, external, want, 0)
 	if len(want) != 4 {

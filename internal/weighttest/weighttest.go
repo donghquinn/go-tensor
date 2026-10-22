@@ -58,7 +58,7 @@ func Check(t *testing.T, got map[string]*tensor.Tensor, want map[string]Entry, t
 			t.Errorf("%s: shape %v, want %v", name, g.Shape(), w.Shape)
 			continue
 		}
-		for i, v := range g.Data() {
+		for i, v := range g.Float64s() {
 			if d := math.Abs(v - w.Values[i]); d > tol*math.Max(1, math.Abs(w.Values[i])) {
 				t.Errorf("%s[%d] = %v, want %v", name, i, v, w.Values[i])
 				break

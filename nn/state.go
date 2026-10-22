@@ -120,7 +120,7 @@ func LoadStateDict(m Module, sd map[string]*tensor.Tensor, strict bool) error {
 		byName[p.Name] = p.Value
 	}
 	for _, p := range load {
-		copy(byName[p.Name].Data(), p.Value.Data())
+		byName[p.Name].CopyFrom(p.Value)
 	}
 	return nil
 }

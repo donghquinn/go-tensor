@@ -217,9 +217,9 @@ func rebuildTensor(args Tuple) (*tensor.Tensor, error) {
 		}
 	}
 	if len(size) == 0 {
-		return tensor.Scalar(out[0]), nil
+		return tensor.FromFloat64(out[:1]).Reshape(), nil
 	}
-	return tensor.New(out, size...), nil
+	return tensor.FromFloat64(out, size...), nil
 }
 
 func ints(v any) ([]int, bool) {

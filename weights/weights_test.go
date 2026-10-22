@@ -65,7 +65,7 @@ func TestPyTorchModelInEveryFormat(t *testing.T) {
 			tensor.NoGrad(func() { y = model.Forward(x) })
 			for i, want := range io.Output.Values {
 				// PyTorch computed in float32; Go computes in float64.
-				if got := y.Data()[i]; math.Abs(got-want) > 1e-5 {
+				if got := y.Float64s()[i]; math.Abs(got-want) > 1e-5 {
 					t.Fatalf("output[%d] = %v, PyTorch gave %v", i, got, want)
 				}
 			}
@@ -104,21 +104,21 @@ func TestLoadStateDictStrictness(t *testing.T) {
 	}
 	// A model with an extra layer: "6.weight"/"6.bias" are missing from sd.
 	bigger := nn.NewSequential(append(newCNN().(*nn.Sequential).Layers, nn.NewReLU(), nn.NewLinear(3, 2))...)
-	before := append([]float64(nil), bigger.Layers[0].Parameters()[0].Data()...)
+	before := append([]float64(nil), bigger.Layers[0].Parameters()[0].Float64s()...)
 
 	err = nn.LoadStateDict(bigger, sd, true)
 	var sde *nn.StateDictError
 	if !errors.As(err, &sde) || len(sde.Missing) != 2 || sde.Missing[0] != "6.weight" {
 		t.Fatalf("strict load error = %v", err)
 	}
-	if got := bigger.Layers[0].Parameters()[0].Data(); got[0] != before[0] {
+	if got := bigger.Layers[0].Parameters()[0].Float64s(); got[0] != before[0] {
 		t.Fatal("a failed strict load modified the model")
 	}
 
 	if err := nn.LoadStateDict(bigger, sd, false); err != nil {
 		t.Fatalf("non-strict load: %v", err)
 	}
-	if got := bigger.Layers[0].Parameters()[0].Data(); got[0] != sd["0.weight"].Data()[0] {
+	if got := bigger.Layers[0].Parameters()[0].Float64s(); got[0] != sd["0.weight"].Float64s()[0] {
 		t.Fatal("non-strict load did not copy matching parameters")
 	}
 

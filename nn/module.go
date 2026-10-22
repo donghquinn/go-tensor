@@ -14,6 +14,23 @@ type Module interface {
 	Parameters() []*tensor.Tensor
 }
 
+// To moves every parameter of m to device d in place, like model.to(device).
+// Optimizers created before the move keep working, because the parameters
+// remain the same *tensor.Tensor values.
+func To(m Module, d tensor.Device) {
+	for _, p := range m.Parameters() {
+		p.MoveTo(d)
+	}
+}
+
+// ToDType converts every parameter of m to dtype dt in place, like
+// model.to(dtype) or model.double().
+func ToDType(m Module, dt tensor.DType) {
+	for _, p := range m.Parameters() {
+		p.CastTo(dt)
+	}
+}
+
 // Linear applies y = x @ Weightᵀ + Bias. Weight has shape (out, in) and Bias
 // has shape (out), matching torch.nn.Linear.
 type Linear struct {

@@ -129,12 +129,12 @@ func ReadNpy(r io.Reader) (*tensor.Tensor, error) {
 		return nil, err
 	}
 	if len(shape) == 0 {
-		return tensor.Scalar(data[0]), nil
+		return tensor.FromFloat64(data[:1]).Reshape(), nil
 	}
 	if string(fm[1]) == "True" {
 		data = fromFortran(data, shape)
 	}
-	return tensor.New(data, shape...), nil
+	return tensor.FromFloat64(data, shape...), nil
 }
 
 // fromFortran reorders column-major data into row-major order.
@@ -213,7 +213,7 @@ func WriteNpy(w io.Writer, t *tensor.Tensor) error {
 	buf.Write([]byte{1, 0})
 	binary.Write(&buf, binary.LittleEndian, uint16(len(header)))
 	buf.WriteString(header)
-	binary.Write(&buf, binary.LittleEndian, t.Data())
+	binary.Write(&buf, binary.LittleEndian, t.Float64s())
 	_, err := w.Write(buf.Bytes())
 	return err
 }

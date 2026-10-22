@@ -40,7 +40,7 @@ func TestRoundTrip(t *testing.T) {
 		}
 		want := map[string]weighttest.Entry{}
 		for k, v := range in {
-			e := weighttest.Entry{Shape: v.Shape(), Values: append([]float64(nil), v.Data()...)}
+			e := weighttest.Entry{Shape: v.Shape(), Values: append([]float64(nil), v.Float64s()...)}
 			if dt == F32 {
 				for i, x := range e.Values {
 					e.Values[i] = float64(float32(x))

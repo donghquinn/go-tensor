@@ -3,6 +3,8 @@ package tensor
 import (
 	"fmt"
 	"sync/atomic"
+
+	"github.com/donghquinn/go-tensor/internal/backend"
 )
 
 var gradDisabled atomic.Bool
@@ -28,18 +30,19 @@ type node struct {
 	backward BackwardFunc
 }
 
-// CustomOp wraps an already computed result as the output of a differentiable
-// operation, like subclassing torch.autograd.Function. data is used without
-// copying. backward runs with gradient tracking disabled.
-func CustomOp(op string, data []float64, shape []int, inputs []*Tensor, backward BackwardFunc) *Tensor {
-	if numel(shape) != len(data) {
-		panic(fmt.Sprintf("tensor: %s produced %d values for shape %v", op, len(data), shape))
+// CustomOp records out as the result of a differentiable operation on inputs,
+// like subclassing torch.autograd.Function. Compute out with any tensor
+// operations (they are not recorded) and supply backward, which runs with
+// gradient tracking disabled. The returned tensor shares out's data.
+func CustomOp(op string, out *Tensor, inputs []*Tensor, backward BackwardFunc) *Tensor {
+	for _, in := range inputs {
+		checkSame(op, out, in)
 	}
-	return newResult(data, shape, op, inputs, backward)
+	return newResult(out.st, out.shape, op, inputs, backward)
 }
 
-func newResult(data []float64, shape []int, op string, inputs []*Tensor, backward BackwardFunc) *Tensor {
-	out := fromData(data, shape)
+func newResult(st backend.Storage, shape []int, op string, inputs []*Tensor, backward BackwardFunc) *Tensor {
+	out := fromStorage(st, shape)
 	if !IsGradEnabled() {
 		return out
 	}
@@ -67,7 +70,7 @@ func (t *Tensor) Backward(grad ...*Tensor) {
 			panic(fmt.Sprintf("tensor: Backward grad shape %v does not match output shape %v", seed.shape, t.shape))
 		}
 	} else {
-		if len(t.data) != 1 {
+		if t.Numel() != 1 {
 			panic("tensor: grad can be implicitly created only for scalar outputs")
 		}
 		seed = OnesLike(t)

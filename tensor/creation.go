@@ -78,3 +78,10 @@ func Randn(shape ...int) *Tensor {
 	rngMu.Unlock()
 	return fromData(data, shape)
 }
+
+// RandPerm returns a random permutation of 0..n-1, like torch.randperm.
+func RandPerm(n int) []int {
+	rngMu.Lock()
+	defer rngMu.Unlock()
+	return rng.Perm(n)
+}

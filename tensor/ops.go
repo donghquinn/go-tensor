@@ -234,14 +234,9 @@ func (t *Tensor) T() *Tensor {
 	}
 	r, c := t.shape[nd-2], t.shape[nd-1]
 	batch := len(t.data) / (r * c)
-	out := make([]float64, len(t.data))
+	out := make([]float64, 0, len(t.data))
 	for b := 0; b < batch; b++ {
-		src, dst := t.data[b*r*c:(b+1)*r*c], out[b*r*c:(b+1)*r*c]
-		for i := 0; i < r; i++ {
-			for j := 0; j < c; j++ {
-				dst[j*r+i] = src[i*c+j]
-			}
-		}
+		out = append(out, transpose2d(t.data[b*r*c:(b+1)*r*c], r, c)...)
 	}
 	shape := append([]int(nil), t.shape...)
 	shape[nd-2], shape[nd-1] = c, r
@@ -332,5 +327,43 @@ func (t *Tensor) Pick(index []int) *Tensor {
 			d[i*c+j] = g.data[i]
 		}
 		return []*Tensor{fromData(d, t.shape)}
+	})
+}
+
+// Index returns t[i], selecting along the first dimension. The result shares
+// memory with t.
+func (t *Tensor) Index(i int) *Tensor {
+	if len(t.shape) == 0 || i < 0 || i >= t.shape[0] {
+		panic(fmt.Sprintf("tensor: Index %d out of range for shape %v", i, t.shape))
+	}
+	sz := len(t.data) / t.shape[0]
+	return newResult(t.data[i*sz:(i+1)*sz], t.shape[1:], "Index", []*Tensor{t}, func(g *Tensor) []*Tensor {
+		d := make([]float64, len(t.data))
+		copy(d[i*sz:], g.data)
+		return []*Tensor{fromData(d, t.shape)}
+	})
+}
+
+// Stack joins tensors of identical shape along a new first dimension.
+func Stack(ts []*Tensor) *Tensor {
+	if len(ts) == 0 {
+		panic("tensor: Stack needs at least one tensor")
+	}
+	inner := ts[0].shape
+	sz := numel(inner)
+	out := make([]float64, 0, len(ts)*sz)
+	for _, t := range ts {
+		if !equalShape(t.shape, inner) {
+			panic(fmt.Sprintf("tensor: Stack shape mismatch %v vs %v", t.shape, inner))
+		}
+		out = append(out, t.data...)
+	}
+	shape := append([]int{len(ts)}, inner...)
+	return newResult(out, shape, "Stack", ts, func(g *Tensor) []*Tensor {
+		gs := make([]*Tensor, len(ts))
+		for i := range gs {
+			gs[i] = fromData(g.data[i*sz:(i+1)*sz], inner)
+		}
+		return gs
 	})
 }

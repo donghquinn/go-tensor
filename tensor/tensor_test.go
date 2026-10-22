@@ -69,6 +69,12 @@ func TestGradients(t *testing.T) {
 		{"Mean", func(x ...*Tensor) *Tensor { return x[0].Mul(x[0]).Mean() }, []*Tensor{Randn(3, 4)}},
 		{"LogSoftmax", func(x ...*Tensor) *Tensor { return x[0].LogSoftmax().Mul(x[1]) }, []*Tensor{Randn(3, 4), Randn(3, 4)}},
 		{"Pick", func(x ...*Tensor) *Tensor { return x[0].Pick([]int{2, 0, 1}).Pow(2) }, []*Tensor{Randn(3, 4)}},
+		{"Index", func(x ...*Tensor) *Tensor { return x[0].Index(1).Pow(2) }, []*Tensor{Randn(3, 2, 2)}},
+		{"Stack", func(x ...*Tensor) *Tensor { return Stack([]*Tensor{x[0], x[1].Exp()}).Mul(x[0]) }, []*Tensor{Randn(3), Randn(3)}},
+		{"Conv2d", func(x ...*Tensor) *Tensor { return Conv2d(x[0], x[1], x[2], 1, 0).Pow(2) }, []*Tensor{Randn(2, 3, 5, 5), Randn(4, 3, 3, 3), Randn(4)}},
+		{"Conv2d/stride+pad", func(x ...*Tensor) *Tensor { return Conv2d(x[0], x[1], nil, 2, 1).Pow(2) }, []*Tensor{Randn(2, 2, 5, 4), Randn(3, 2, 3, 2)}},
+		{"MaxPool2d", func(x ...*Tensor) *Tensor { return MaxPool2d(x[0], 2, 2).Pow(2) }, []*Tensor{Randn(2, 3, 4, 6)}},
+		{"MaxPool2d/overlap", func(x ...*Tensor) *Tensor { return MaxPool2d(x[0], 3, 1).Pow(2) }, []*Tensor{Randn(1, 2, 5, 5)}},
 		{"reuse", func(x ...*Tensor) *Tensor { return x[0].Mul(x[0]).Add(x[0].Exp()) }, []*Tensor{Randn(4)}},
 	}
 	for _, c := range cases {
@@ -137,5 +143,39 @@ func TestString(t *testing.T) {
 	want := "tensor([[1, 2],\n        [3, 4]])"
 	if got != want {
 		t.Fatalf("String() = %q, want %q", got, want)
+	}
+}
+
+func TestConv2dValues(t *testing.T) {
+	// 1x1x3x3 input, 1x1x2x2 kernel of ones, padding 0: each output is a 2x2 window sum.
+	x := New([]float64{1, 2, 3, 4, 5, 6, 7, 8, 9}, 1, 1, 3, 3)
+	w := Ones(1, 1, 2, 2)
+	got := Conv2d(x, w, New([]float64{10}), 1, 0)
+	want := []float64{22, 26, 34, 38}
+	if !equalShape(got.Shape(), []int{1, 1, 2, 2}) {
+		t.Fatalf("shape = %v, want [1 1 2 2]", got.Shape())
+	}
+	for i, v := range want {
+		if got.data[i] != v {
+			t.Fatalf("Conv2d = %v, want %v", got.data, want)
+		}
+	}
+
+	pooled := MaxPool2d(x, 2, 1).Data()
+	for i, v := range []float64{5, 6, 8, 9} {
+		if pooled[i] != v {
+			t.Fatalf("MaxPool2d = %v", pooled)
+		}
+	}
+}
+
+// BenchmarkConv2d measures forward+backward of the second conv layer of the
+// MNIST example (batch 64, 16->32 channels, 14x14, 3x3 kernel).
+func BenchmarkConv2d(b *testing.B) {
+	x := Randn(64, 16, 14, 14).SetRequiresGrad(true)
+	w := Randn(32, 16, 3, 3).SetRequiresGrad(true)
+	bias := Randn(32).SetRequiresGrad(true)
+	for i := 0; i < b.N; i++ {
+		Conv2d(x, w, bias, 1, 1).Sum().Backward()
 	}
 }

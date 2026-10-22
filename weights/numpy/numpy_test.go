@@ -40,7 +40,7 @@ func TestRoundTrip(t *testing.T) {
 	}
 	want := map[string]weighttest.Entry{}
 	for k, v := range in {
-		want[k] = weighttest.Entry{Shape: v.Shape(), Values: v.Data()}
+		want[k] = weighttest.Entry{Shape: v.Shape(), Values: v.Float64s()}
 	}
 	weighttest.Check(t, out, want, 0)
 }

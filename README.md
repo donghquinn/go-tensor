@@ -5,10 +5,11 @@
 
 **A PyTorch-style deep learning library for Go.** Build, train and run neural
 networks with n-dimensional tensors, automatic differentiation, layers,
-optimizers and data loaders, and load pretrained weights from PyTorch,
-safetensors, ONNX, NumPy and GGUF files.
+optimizers and data loaders, on the CPU or on the GPU, and load pretrained
+weights from PyTorch, safetensors, ONNX, NumPy and GGUF files.
 
-Pure Go: no cgo, no external dependencies, nothing to install besides the Go toolchain.
+No external dependencies. The CPU backend is pure Go; GPU backends are opt-in
+with a build tag.
 
 ```go
 model := nn.NewSequential(
@@ -18,8 +19,10 @@ model := nn.NewSequential(
 )
 opt := optim.NewAdam(model.Parameters(), optim.AdamConfig{LR: 1e-3})
 
+nn.To(model, tensor.MPS) // or tensor.CPU, like model.to("mps")
+
 for x, y := range loader.All() {
-	loss := nn.CrossEntropyLoss(model.Forward(x), y)
+	loss := nn.CrossEntropyLoss(model.Forward(x.To(tensor.MPS)), y)
 	opt.ZeroGrad()
 	loss.Backward()
 	opt.Step()
@@ -33,6 +36,7 @@ for x, y := range loader.All() {
 - [Quick start](#quick-start)
 - [Usage guide](#usage-guide)
   - [Tensors](#tensors)
+  - [Devices and dtypes](#devices-and-dtypes)
   - [Automatic differentiation](#automatic-differentiation)
   - [Custom differentiable operations](#custom-differentiable-operations)
   - [Building models](#building-models)
@@ -50,7 +54,10 @@ for x, y := range loader.All() {
 ## Features
 
 - **Tensors**: n-dimensional arrays with NumPy/PyTorch broadcasting, element-wise
-  math, reductions, reshaping, matrix multiplication and 2-D convolution.
+  math, reductions, reshaping, matrix multiplication and 2-D convolution, in
+  `float32` (default) or `float64`.
+- **GPU acceleration**: `.To(tensor.MPS)` runs everything (forward, backward and
+  optimizer steps) on Apple-silicon GPUs via Metal. CUDA is next on the roadmap.
 - **Autograd**: reverse-mode automatic differentiation with `Backward()`,
   gradient accumulation, `NoGrad`, and custom differentiable ops.
 - **Neural networks**: `Linear`, `Conv2d`, `MaxPool2d`, `Dropout`, `Flatten`,
@@ -62,8 +69,8 @@ for x, y := range loader.All() {
 - **Pretrained weights**: load PyTorch (`.pth`/`.pt`, TorchScript), safetensors,
   ONNX, NumPy (`.npy`/`.npz`) and GGUF (including quantized llama.cpp models), all
   without executing any code from the file.
-- **Multi-core**: large matrix multiplications and convolutions are split across
-  goroutines automatically.
+- **Multi-core CPU**: large matrix multiplications and convolutions are split
+  across goroutines automatically.
 - **Tested**: every gradient is checked numerically, and every weight format is
   verified bit-exactly against files written by the reference Python libraries.
 
@@ -86,6 +93,22 @@ import (
 	"github.com/donghquinn/go-tensor/weights"  // pretrained weight loading
 )
 ```
+
+### GPU support (Apple silicon)
+
+The Metal (MPS) backend uses cgo and is compiled in with the `mps` build tag.
+It needs macOS on Apple silicon and the Xcode Command Line Tools
+(`xcode-select --install`):
+
+```sh
+go build -tags mps ./...
+go test -tags mps ./...
+```
+
+Without the tag, everything still builds as pure Go, and `tensor.IsAvailable(tensor.MPS)`
+reports `false`.
+
+### Examples
 
 To try the bundled examples, clone the repository:
 
@@ -151,8 +174,9 @@ func main() {
 
 ### Tensors
 
-A `*tensor.Tensor` is an n-dimensional array of `float64` values stored in
-row-major order.
+A `*tensor.Tensor` is an n-dimensional array stored in row-major order. New
+tensors are `float32` on the CPU unless you change the defaults (see
+[Devices and dtypes](#devices-and-dtypes)).
 
 ```go
 a := tensor.New([]float64{1, 2, 3, 4, 5, 6}, 2, 3) // 2×3 matrix from data
@@ -196,12 +220,46 @@ Available operations include `Add`, `Sub`, `Mul`, `Div`, `AddScalar`,
 `Index`, `Stack`, `MatMul`, `Conv2d`, `MaxPool2d`, `LogSoftmax`, `Softmax` and `Pick`.
 Shape mismatches panic, like out-of-range slice indexing.
 
-`Data()` returns the underlying slice without copying, like `tensor.numpy()` in
-PyTorch:
+Read values back with `Float32s()` or `Float64s()`, which return a copy (from
+the GPU, if the tensor lives there):
 
 ```go
-vals := a.Data() // []float64{1, 2, 3, 4, 5, 6}, shares memory with a
+vals := a.Float64s() // []float64{1, 2, 3, 4, 5, 6}
 ```
+
+### Devices and dtypes
+
+Every tensor has a device and a dtype, like in PyTorch. Operations run on the
+device of their inputs, and all inputs must share a device and dtype.
+
+```go
+fmt.Println(tensor.IsAvailable(tensor.MPS)) // true on Apple silicon with -tags mps
+
+x := tensor.Randn(1024, 1024)  // float32 on the CPU
+g := x.To(tensor.MPS)          // copy to the GPU
+y := g.MatMul(g).ReLU()        // runs on the GPU
+fmt.Println(y.Device())        // mps
+back := y.To(tensor.CPU)       // copy back
+
+d := x.ToDType(tensor.Float64) // convert dtype
+fmt.Println(d.DType())         // float64
+```
+
+| Device | Build tag | dtypes |
+|--------|-----------|--------|
+| `tensor.CPU` | none | `Float32`, `Float64` |
+| `tensor.MPS` (Apple-silicon GPU via Metal) | `mps` | `Float32` |
+| `tensor.CUDA(i)` | `cuda` (planned) | |
+
+Move a whole model with `nn.To(model, device)`, like `model.to(device)`. It
+moves the parameters in place, so an optimizer created earlier keeps working.
+`nn.ToDType(model, tensor.Float64)` converts a model's dtype.
+
+Change the defaults for newly created tensors with `tensor.SetDefaultDType` and
+`tensor.SetDefaultDevice`, and parse device names such as `"cuda:1"` from flags
+with `tensor.ParseDevice`. GPU work is queued and runs asynchronously; reading
+values (`Item`, `Float32s`, ...) waits for it automatically, and
+`tensor.Synchronize(device)` waits explicitly, for example when timing.
 
 ### Automatic differentiation
 
@@ -240,18 +298,20 @@ tensor.NoGrad(func() {
 ### Custom differentiable operations
 
 Like subclassing `torch.autograd.Function`: compute the forward result yourself
-and supply the backward rule. The backward function receives the gradient of the
-output and returns one gradient per input:
+(with tensor operations, which are not recorded, or from host data) and supply
+the backward rule. The backward function receives the gradient of the output and
+returns one gradient per input:
 
 ```go
 // Softplus computes log(1 + eˣ); its derivative is sigmoid(x).
 func Softplus(x *tensor.Tensor) *tensor.Tensor {
-	in := x.Data()
+	in := x.Float64s()
 	out := make([]float64, len(in))
 	for i, v := range in {
 		out[i] = math.Log1p(math.Exp(v))
 	}
-	return tensor.CustomOp("Softplus", out, x.Shape(), []*tensor.Tensor{x},
+	y := tensor.FromFloat64(out, x.Shape()...).ToDType(x.DType()).To(x.Device())
+	return tensor.CustomOp("Softplus", y, []*tensor.Tensor{x},
 		func(grad *tensor.Tensor) []*tensor.Tensor {
 			return []*tensor.Tensor{grad.Mul(x.Sigmoid())}
 		})
@@ -319,11 +379,12 @@ Layer weights use the same shapes and default initialization as PyTorch:
 
 ### Training
 
-A full training loop with mini-batches, a held-out test set, and train/eval
-modes (needed so `Dropout` is only active during training):
+A full training loop with mini-batches, a held-out test set, train/eval modes
+(needed so `Dropout` is only active during training), and a device to train on:
 
 ```go
-func train(model nn.Module, trainSet, testSet data.Dataset, epochs int) {
+func train(model nn.Module, trainSet, testSet data.Dataset, epochs int, dev tensor.Device) {
+	nn.To(model, dev) // move the parameters before creating the optimizer
 	opt := optim.NewAdam(model.Parameters(), optim.AdamConfig{LR: 1e-3})
 	loader := data.NewDataLoader(trainSet, 64, true) // batch size 64, shuffled
 
@@ -331,7 +392,7 @@ func train(model nn.Module, trainSet, testSet data.Dataset, epochs int) {
 		nn.Train(model) // like model.train()
 		total, batches := 0.0, 0
 		for x, y := range loader.All() { // one epoch; reshuffled each time
-			loss := nn.CrossEntropyLoss(model.Forward(x), y)
+			loss := nn.CrossEntropyLoss(model.Forward(x.To(dev)), y) // batches start on the CPU
 			opt.ZeroGrad()
 			loss.Backward()
 			opt.Step()
@@ -339,16 +400,16 @@ func train(model nn.Module, trainSet, testSet data.Dataset, epochs int) {
 			batches++
 		}
 		fmt.Printf("epoch %d  loss %.4f  accuracy %.2f%%\n",
-			epoch, total/float64(batches), 100*accuracy(model, testSet))
+			epoch, total/float64(batches), 100*accuracy(model, testSet, dev))
 	}
 }
 
-func accuracy(model nn.Module, ds data.Dataset) float64 {
+func accuracy(model nn.Module, ds data.Dataset, dev tensor.Device) float64 {
 	nn.Eval(model) // like model.eval()
 	correct := 0
 	tensor.NoGrad(func() {
 		for x, y := range data.NewDataLoader(ds, 1000, false).All() {
-			for i, pred := range model.Forward(x).Argmax() {
+			for i, pred := range model.Forward(x.To(dev)).Argmax() {
 				if pred == y[i] {
 					correct++
 				}
@@ -431,6 +492,9 @@ if err := nn.LoadStateDict(model, sd, true); err != nil { // strict, like PyTorc
 nn.Eval(model)
 ```
 
+`LoadStateDict` converts values to each parameter's dtype and device, so you can
+call `nn.To(model, tensor.MPS)` before or after loading.
+
 Pass `strict=false` to load only the keys that match, for example when
 fine-tuning with a different final layer. A shape mismatch is always an error,
 and a failed load leaves the model unchanged.
@@ -443,8 +507,9 @@ and a failed load leaves the model unchanged.
 | NumPy `.npy` / `.npz` | `weights/numpy` | ✓ | ✓ | Fortran order, big-endian, compressed archives |
 | GGUF | `weights/gguf` | ✓ | | F32/F16/BF16/F64/ints, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q4_K, Q5_K, Q6_K; metadata |
 
-All values are converted to `float64`. Each format's package can also be used
-directly when you need more than the tensors:
+Loaders return `float64` tensors on the CPU, so no precision is lost before
+`LoadStateDict` converts them. Each format's package can also be used directly
+when you need more than the tensors:
 
 ```go
 // A training checkpoint such as {"model": state_dict, "epoch": 7}.
@@ -485,20 +550,26 @@ test, err := mnist.Load(".cache/mnist", false, true)
 Runnable programs live in [`examples/`](examples):
 
 ```sh
-go run ./examples/xor                         # MLP learns XOR
-go run ./examples/mnist -model cnn            # CNN on MNIST
-go run ./examples/mnist -model mlp -epochs 5  # MLP on MNIST
+go run ./examples/xor                               # MLP learns XOR
+go run ./examples/mnist -model cnn                  # CNN on MNIST, CPU
+go run -tags mps ./examples/mnist -device mps       # CNN on MNIST, Apple GPU
+go run ./examples/mnist -model mlp -epochs 5        # MLP on MNIST
 ```
 
 `examples/mnist` downloads the dataset into `.cache/mnist`, trains, prints test
 accuracy per epoch, then saves the model and checks a reloaded copy. Flags:
-`-model`, `-epochs`, `-batch`, `-lr`, `-data`, `-save`. Results after 3 epochs
-on an Apple M5:
+`-model`, `-device`, `-epochs`, `-batch`, `-lr`, `-data`, `-save`. Results after
+3 epochs on an Apple M5 (10-core CPU, 10-core GPU):
 
-| Model | Test accuracy | Time per epoch |
-|-------|---------------|----------------|
-| CNN (conv 16 → conv 32 → fc 128, dropout) | 98.78% | ~26 s |
-| MLP (784 → 128 → 10) | 96.75% | ~1.2 s |
+| Model | Device | Test accuracy | Time per epoch |
+|-------|--------|---------------|----------------|
+| CNN (conv 16 → conv 32 → fc 128, dropout) | MPS | 98.73% | ~3.5 s |
+| CNN (conv 16 → conv 32 → fc 128, dropout) | CPU | 98.74% | ~31 s |
+| MLP (784 → 128 → 10) | MPS | 96.77% | ~0.7 s |
+| MLP (784 → 128 → 10) | CPU | 96.79% | ~1.5 s |
+
+CPU and GPU runs follow the same loss curve; small differences come from
+float32 rounding in different summation orders.
 
 ## Reference
 
@@ -508,8 +579,8 @@ Full API documentation is on [pkg.go.dev](https://pkg.go.dev/github.com/donghqui
 
 | Package | PyTorch equivalent | Contents |
 |---------|--------------------|----------|
-| `tensor` | `torch`, `torch.autograd` | `Tensor`, creation functions, broadcasting math, reductions, `MatMul`, `Conv2d`, `MaxPool2d`, `Backward`, `NoGrad`, `CustomOp` |
-| `nn` | `torch.nn` | `Module`, `Linear`, `Conv2d`, `MaxPool2d`, `Dropout`, `Flatten`, `Sequential`, activations, losses, `Train`/`Eval`, `StateDict`/`LoadStateDict` |
+| `tensor` | `torch`, `torch.autograd` | `Tensor`, devices and dtypes, creation functions, broadcasting math, reductions, `MatMul`, `Conv2d`, `MaxPool2d`, `Backward`, `NoGrad`, `CustomOp` |
+| `nn` | `torch.nn` | `Module`, `Linear`, `Conv2d`, `MaxPool2d`, `Dropout`, `Flatten`, `Sequential`, activations, losses, `Train`/`Eval`, `To`/`ToDType`, `StateDict`/`LoadStateDict` |
 | `optim` | `torch.optim` | `SGD`, `Adam` |
 | `data` | `torch.utils.data` | `Dataset`, `TensorDataset`, `DataLoader` |
 | `datasets/mnist` | `torchvision.datasets.MNIST` | MNIST download and loading |
@@ -528,6 +599,13 @@ Full API documentation is on [pkg.go.dev](https://pkg.go.dev/github.com/donghqui
 | `x.grad` | `x.Grad()` |
 | `with torch.no_grad():` | `tensor.NoGrad(func() { ... })` |
 | `torch.manual_seed(0)` | `tensor.ManualSeed(0)` |
+| `torch.device("mps")` | `tensor.MPS`, or `tensor.ParseDevice("mps")` |
+| `torch.backends.mps.is_available()` | `tensor.IsAvailable(tensor.MPS)` |
+| `x.to("mps")`, `x.cpu()` | `x.To(tensor.MPS)`, `x.To(tensor.CPU)` |
+| `x.double()`, `x.float()` | `x.ToDType(tensor.Float64)`, `x.ToDType(tensor.Float32)` |
+| `x.numpy()`, `x.tolist()` | `x.Float32s()`, `x.Float64s()` |
+| `torch.set_default_dtype(torch.float64)` | `tensor.SetDefaultDType(tensor.Float64)` |
+| `model.to("mps")` | `nn.To(model, tensor.MPS)` |
 | `model.train()` / `model.eval()` | `nn.Train(model)` / `nn.Eval(model)` |
 | `model.state_dict()` | `nn.StateDict(model)` |
 | `model.load_state_dict(sd)` | `nn.LoadStateDict(model, sd, true)` |
@@ -537,19 +615,33 @@ Full API documentation is on [pkg.go.dev](https://pkg.go.dev/github.com/donghqui
 
 ## Design notes
 
-- Values are `float64`, stored contiguously in row-major order.
-- Shape errors panic, like out-of-range slice indexing; I/O and file-format
-  errors are returned as `error`.
-- `MatMul` splits rows across goroutines for large matrices; `Conv2d` is lowered
-  to `MatMul` via im2col, so convolutions use multiple cores too.
+- **Backends.** Each device implements about a dozen primitives (element-wise
+  math, broadcasting arithmetic, strided copy, reductions, matrix multiply,
+  im2col/col2im, pooling) defined in `internal/backend`. Every tensor operation,
+  including every gradient, is built from them, so a new device needs only these
+  primitives to support training. The CPU backend is pure Go and generic over
+  `float32`/`float64`; the MPS backend is Metal compute kernels plus
+  `MPSMatrixMultiplication`.
+- **GPU execution.** Work is encoded into Metal command buffers and committed in
+  batches, so the CPU keeps queueing while the GPU runs; reading values waits for
+  the GPU. Kernels compute one output per thread and never use atomics, so
+  results are deterministic. Freed GPU buffers are pooled and reused, like
+  PyTorch's caching allocator.
+- Tensors are stored contiguously in row-major order. Shape errors panic, like
+  out-of-range slice indexing; I/O and file-format errors are returned as `error`.
+- `Conv2d` is lowered to `MatMul` via im2col, so it uses the CPU's goroutines or
+  the GPU's matrix units.
 - Every differentiable operation is checked against finite differences in
-  `tensor/tensor_test.go`.
+  `float64`, and on the GPU every operation's output and gradients are checked
+  against the CPU (`tensor/device_mps_test.go`).
 
 ## Known limitations
 
-- **`float64` only.** Uses twice the memory of `float32`, PyTorch's default.
-- **CPU only, no SIMD.** The MNIST CNN keeps about 3 of 10 cores busy; im2col and
-  the `Conv2d` reordering loops are single-threaded.
+- **GPU: Apple silicon only so far.** The MPS backend supports `float32` only
+  (Metal has no `float64`); CUDA is not implemented yet. Data loading,
+  `Dropout` masks and `Argmax` run on the CPU.
+- **CPU: no SIMD.** CPU kernels are plain Go loops; im2col and several reshaping
+  copies are single-threaded.
 - **Copies instead of views.** `T` and broadcasting copy data, and slicing is
   limited to `Index` along the first dimension.
 - **Weights are loaded fully into memory as `float64`.** There is no
@@ -564,12 +656,12 @@ Full API documentation is on [pkg.go.dev](https://pkg.go.dev/github.com/donghqui
 
 ## Roadmap
 
-1. **Generic element types**: `float32` (default) and `float64` via Go generics.
+1. **CUDA backend** (`-tags cuda`) implementing the same primitives with cuBLAS.
 2. **Performance**
-   - [ ] Parallel im2col/col2im and `Conv2d` reordering
-   - [ ] SIMD kernels, or Apple Accelerate / OpenBLAS for `MatMul`
+   - [ ] MPS: fused kernels and `MPSGraph`/MPS convolution primitives
+   - [ ] CPU: parallel im2col and copies; SIMD, or Accelerate / OpenBLAS for `MatMul`
    - [ ] Strided views (zero-copy `Transpose`, `Slice`, `Expand`)
-   - [ ] GPU backends (Metal, CUDA)
+   - [ ] `float16`/`bfloat16` dtypes
 3. **More layers and ops**
    - [ ] `BatchNorm`, `Embedding`, `AvgPool2d`
    - [ ] Batched `MatMul`, `Concat`, slicing
@@ -585,13 +677,15 @@ Done:
 - [x] `DataLoader` with Go iterators, MNIST example
 - [x] `Conv2d`, `MaxPool2d`, `Dropout`, train/eval modes
 - [x] Named state dicts; PyTorch, safetensors, ONNX, NumPy and GGUF weight loading
+- [x] `float32`/`float64` dtypes, devices, and the Apple-silicon GPU (MPS) backend
 
 ## Development
 
 ```sh
-go test ./...                     # all tests
+go test ./...                     # all tests (CPU)
+go test -tags mps ./...           # also run every op on the Apple GPU and compare with the CPU
 go test -race ./...               # with the race detector
-go test ./tensor -bench Conv2d    # convolution benchmark
+go test -tags mps ./tensor -bench Conv2d   # convolution benchmark, CPU vs GPU
 go test ./weights/pth -fuzz FuzzUnpickle -fuzztime 30s
 ```
 

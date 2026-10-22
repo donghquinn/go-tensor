@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/donghquinn/go-tensor/tensor"
 )
 
 // File layout (little-endian): magic, version, parameter count, then for each
@@ -30,7 +32,7 @@ func Save(w io.Writer, m Module) error {
 		for _, s := range shape {
 			write(uint32(s))
 		}
-		write(p.Data())
+		write(p.Float64s())
 	}
 	return bw.Flush()
 }
@@ -77,9 +79,11 @@ func Load(r io.Reader, m Module) error {
 		if !match {
 			return fmt.Errorf("nn: parameter %d has shape %v in file, %v in module", i, dims, want)
 		}
-		if err := binary.Read(br, binary.LittleEndian, p.Data()); err != nil {
+		vals := make([]float64, p.Numel())
+		if err := binary.Read(br, binary.LittleEndian, vals); err != nil {
 			return fmt.Errorf("nn: parameter %d: %w", i, err)
 		}
+		p.CopyFrom(tensor.FromFloat64(vals))
 	}
 	return nil
 }

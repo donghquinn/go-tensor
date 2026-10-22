@@ -49,9 +49,9 @@ func (d *Dropout) Forward(x *tensor.Tensor) *tensor.Tensor {
 	if d.eval || d.P == 0 {
 		return x
 	}
-	mask := tensor.Rand(x.Shape()...)
+	// The mask is drawn on the CPU so a seed gives the same mask on every device.
+	m := tensor.Rand(x.Shape()...).Float64s()
 	scale := 1 / (1 - d.P)
-	m := mask.Data()
 	for i, r := range m {
 		if r < d.P {
 			m[i] = 0
@@ -59,6 +59,7 @@ func (d *Dropout) Forward(x *tensor.Tensor) *tensor.Tensor {
 			m[i] = scale
 		}
 	}
+	mask := tensor.FromFloat64(m, x.Shape()...).ToDType(x.DType()).To(x.Device())
 	return x.Mul(mask)
 }
 

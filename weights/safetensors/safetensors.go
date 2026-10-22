@@ -95,9 +95,9 @@ func Decode(b []byte) (map[string]*tensor.Tensor, map[string]string, error) {
 			return nil, nil, fmt.Errorf("safetensors: tensor %q: %w", name, err)
 		}
 		if len(h.Shape) == 0 {
-			tensors[name] = tensor.Scalar(data[0])
+			tensors[name] = tensor.FromFloat64(data[:1]).Reshape()
 		} else {
-			tensors[name] = tensor.New(data, h.Shape...)
+			tensors[name] = tensor.FromFloat64(data, h.Shape...)
 		}
 	}
 	return tensors, meta, nil
@@ -147,7 +147,7 @@ func Encode(tensors map[string]*tensor.Tensor, dt DType, metadata map[string]str
 	for _, name := range names {
 		t := tensors[name]
 		start := len(body)
-		for _, v := range t.Data() {
+		for _, v := range t.Float64s() {
 			if dt == F64 {
 				body = binary.LittleEndian.AppendUint64(body, math.Float64bits(v))
 			} else {

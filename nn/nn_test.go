@@ -74,7 +74,7 @@ func TestSaveLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 	x := tensor.Randn(5, 3)
-	a, b := src.Forward(x).Data(), dst.Forward(x).Data()
+	a, b := src.Forward(x).Float64s(), dst.Forward(x).Float64s()
 	for i := range a {
 		if a[i] != b[i] {
 			t.Fatalf("outputs differ after load: %v vs %v", a, b)
@@ -93,7 +93,7 @@ func TestDropoutModes(t *testing.T) {
 	model := nn.NewSequential(d)
 	x := tensor.Ones(1000)
 
-	out := model.Forward(x).Data()
+	out := model.Forward(x).Float64s()
 	zeros := 0
 	for _, v := range out {
 		if v == 0 {

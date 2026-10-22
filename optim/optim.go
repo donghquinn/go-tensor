@@ -1,4 +1,7 @@
 // Package optim implements gradient-based optimizers, modeled after torch.optim.
+//
+// Updates are expressed as tensor operations, so they run on the device of
+// the parameters, and optimizer state lives on that device too.
 package optim
 
 import (
@@ -32,36 +35,38 @@ type SGDConfig struct {
 type SGD struct {
 	SGDConfig
 	params   []*tensor.Tensor
-	velocity [][]float64
+	velocity []*tensor.Tensor // created on the first step
 }
 
 // NewSGD creates an SGD optimizer over params.
 func NewSGD(params []*tensor.Tensor, cfg SGDConfig) *SGD {
-	v := make([][]float64, len(params))
-	for i, p := range params {
-		v[i] = make([]float64, p.Numel())
-	}
-	return &SGD{SGDConfig: cfg, params: params, velocity: v}
+	return &SGD{SGDConfig: cfg, params: params, velocity: make([]*tensor.Tensor, len(params))}
 }
 
 func (o *SGD) ZeroGrad() { zeroGrad(o.params) }
 
 func (o *SGD) Step() {
-	for i, p := range o.params {
-		g := p.Grad()
-		if g == nil {
-			continue
-		}
-		pd, gd, v := p.Data(), g.Data(), o.velocity[i]
-		for j := range pd {
-			d := gd[j] + o.WeightDecay*pd[j]
-			if o.Momentum != 0 {
-				v[j] = o.Momentum*v[j] + d
-				d = v[j]
+	tensor.NoGrad(func() {
+		for i, p := range o.params {
+			g := p.Grad()
+			if g == nil {
+				continue
 			}
-			pd[j] -= o.LR * d
+			d := g
+			if o.WeightDecay != 0 {
+				d = d.Add(p.MulScalar(o.WeightDecay))
+			}
+			if o.Momentum != 0 {
+				if o.velocity[i] == nil {
+					o.velocity[i] = d.Clone()
+				} else {
+					o.velocity[i] = o.velocity[i].MulScalar(o.Momentum).Add(d)
+				}
+				d = o.velocity[i]
+			}
+			p.CopyFrom(p.Sub(d.MulScalar(o.LR)))
 		}
-	}
+	})
 }
 
 // AdamConfig holds the hyperparameters for Adam. Zero values are replaced by
@@ -78,7 +83,7 @@ type AdamConfig struct {
 type Adam struct {
 	AdamConfig
 	params []*tensor.Tensor
-	m, v   [][]float64
+	m, v   []*tensor.Tensor // created on the first step
 	step   int
 }
 
@@ -96,13 +101,8 @@ func NewAdam(params []*tensor.Tensor, cfg AdamConfig) *Adam {
 	if cfg.Eps == 0 {
 		cfg.Eps = 1e-8
 	}
-	m := make([][]float64, len(params))
-	v := make([][]float64, len(params))
-	for i, p := range params {
-		m[i] = make([]float64, p.Numel())
-		v[i] = make([]float64, p.Numel())
-	}
-	return &Adam{AdamConfig: cfg, params: params, m: m, v: v}
+	return &Adam{AdamConfig: cfg, params: params,
+		m: make([]*tensor.Tensor, len(params)), v: make([]*tensor.Tensor, len(params))}
 }
 
 func (o *Adam) ZeroGrad() { zeroGrad(o.params) }
@@ -111,17 +111,22 @@ func (o *Adam) Step() {
 	o.step++
 	bc1 := 1 - math.Pow(o.Beta1, float64(o.step))
 	bc2 := 1 - math.Pow(o.Beta2, float64(o.step))
-	for i, p := range o.params {
-		g := p.Grad()
-		if g == nil {
-			continue
+	tensor.NoGrad(func() {
+		for i, p := range o.params {
+			g := p.Grad()
+			if g == nil {
+				continue
+			}
+			if o.WeightDecay != 0 {
+				g = g.Add(p.MulScalar(o.WeightDecay))
+			}
+			if o.m[i] == nil {
+				o.m[i], o.v[i] = tensor.ZerosLike(p), tensor.ZerosLike(p)
+			}
+			o.m[i] = o.m[i].MulScalar(o.Beta1).Add(g.MulScalar(1 - o.Beta1))
+			o.v[i] = o.v[i].MulScalar(o.Beta2).Add(g.Mul(g).MulScalar(1 - o.Beta2))
+			denom := o.v[i].MulScalar(1 / bc2).Sqrt().AddScalar(o.Eps)
+			p.CopyFrom(p.Sub(o.m[i].MulScalar(o.LR / bc1).Div(denom)))
 		}
-		pd, gd, m, v := p.Data(), g.Data(), o.m[i], o.v[i]
-		for j := range pd {
-			d := gd[j] + o.WeightDecay*pd[j]
-			m[j] = o.Beta1*m[j] + (1-o.Beta1)*d
-			v[j] = o.Beta2*v[j] + (1-o.Beta2)*d*d
-			pd[j] -= o.LR * (m[j] / bc1) / (math.Sqrt(v[j]/bc2) + o.Eps)
-		}
-	}
+	})
 }

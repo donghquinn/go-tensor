@@ -201,9 +201,9 @@ func decodeTensor(b []byte, baseDir string) (string, *tensor.Tensor, error) {
 		return name, nil, fmt.Errorf("has %d values for shape %v", len(data), dims)
 	}
 	if len(dims) == 0 {
-		return name, tensor.Scalar(data[0]), nil
+		return name, tensor.FromFloat64(data[:1]).Reshape(), nil
 	}
-	return name, tensor.New(data, dims...), nil
+	return name, tensor.FromFloat64(data, dims...), nil
 }
 
 func decodeKeyValue(b []byte, into map[string]string) error {

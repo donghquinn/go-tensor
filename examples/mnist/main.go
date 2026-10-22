@@ -20,7 +20,7 @@ import (
 
 func main() {
 	arch := flag.String("model", "cnn", "architecture: cnn or mlp")
-	root := flag.String("data", "data/mnist", "directory for the MNIST files (downloaded if missing)")
+	root := flag.String("data", ".cache/mnist", "directory for the MNIST files (downloaded if missing)")
 	epochs := flag.Int("epochs", 3, "number of training epochs")
 	batchSize := flag.Int("batch", 64, "mini-batch size")
 	lr := flag.Float64("lr", 1e-3, "Adam learning rate")
@@ -54,8 +54,7 @@ func main() {
 		start := time.Now()
 		total, batches := 0.0, 0
 		nn.Train(model)
-		for loader.Next() {
-			x, y := loader.Batch()
+		for x, y := range loader.All() {
 			loss := nn.CrossEntropyLoss(model.Forward(x), y)
 
 			opt.ZeroGrad()
@@ -110,9 +109,7 @@ func accuracy(model nn.Module, ds data.Dataset) float64 {
 	nn.Eval(model)
 	correct := 0
 	tensor.NoGrad(func() {
-		loader := data.NewDataLoader(ds, 1000, false)
-		for loader.Next() {
-			x, y := loader.Batch()
+		for x, y := range data.NewDataLoader(ds, 1000, false).All() {
 			for i, p := range model.Forward(x).Argmax() {
 				if p == y[i] {
 					correct++

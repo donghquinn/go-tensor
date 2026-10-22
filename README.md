@@ -27,7 +27,7 @@ go run ./examples/mnist -model cnn   # 2-layer CNN on MNIST
 go run ./examples/mnist -model mlp   # 784-128-10 MLP on MNIST
 ```
 
-The MNIST example downloads the dataset into `data/mnist` (checksum-verified),
+The MNIST example downloads the dataset into `.cache/mnist` (checksum-verified),
 trains for 3 epochs, then saves the model and reloads it. On an Apple M5:
 
 | Model | Test accuracy (3 epochs) | Time per epoch |
@@ -59,7 +59,7 @@ trains for 3 epochs, then saves the model and reloads it. On an Apple M5:
 | `torch.manual_seed(0)` | `tensor.ManualSeed(0)` |
 | `torch.save(model.state_dict(), p)` | `nn.SaveFile(p, model)` |
 | `model.train()` / `model.eval()` | `nn.Train(model)` / `nn.Eval(model)` |
-| `for x, y in loader:` | `for loader.Next() { x, y := loader.Batch() }` |
+| `for x, y in loader:` | `for x, y := range loader.All() { ... }` |
 
 Custom differentiable ops work like `torch.autograd.Function`: compute the forward
 result yourself and pass a backward closure to `tensor.CustomOp`.
@@ -67,17 +67,48 @@ result yourself and pass a backward closure to `tensor.CustomOp`.
 ## Design notes
 
 - Data is `float64`, stored contiguously in row-major order.
+- Requires Go 1.23+ (`DataLoader.All` is a range-over-func iterator).
 - Shape errors panic, like out-of-range slice indexing.
 - `MatMul` splits rows across goroutines for large matrices; `Conv2d` lowers to
-  `MatMul` via im2col, so convolutions use every core too.
+  `MatMul` via im2col so convolutions benefit from it too.
 - Every differentiable op is checked against finite differences in `tensor/tensor_test.go`.
+
+## Known limitations
+
+- **CPU utilization.** The CNN example keeps only ~3 of 10 cores busy: im2col,
+  col2im and the gradient reordering in `Conv2d` are single-threaded, and with
+  few output channels the matrix products are narrow.
+- **Memory.** im2col materializes every receptive field; the second conv layer of
+  the MNIST CNN allocates ~29 MB per batch of 64.
+- **`float64` only.** Twice the memory and half the SIMD throughput of `float32`.
+- **Copies instead of views.** `T` and broadcasting copy data, and there is no
+  general slicing yet (only `Index` along the first dimension).
+- **Positional checkpoints.** `nn.Save`/`nn.Load` match parameters by position in
+  `Parameters()`, not by name, so the architecture must be rebuilt identically.
+- **Process-wide `NoGrad`.** It is a global switch, not per goroutine.
 
 ## Roadmap
 
-- [ ] Generic element types (`float32`, `float16`) via Go generics
-- [ ] Strided views (zero-copy `Transpose`, `Slice`, `Expand`)
-- [ ] Batched `MatMul`, `Concat`, slicing
+Suggested order — generics first, because the element type shapes every kernel
+written afterwards:
+
+1. **Generic element types** — `float32` (default, like PyTorch) and `float64`
+   via Go generics.
+2. **Performance**
+   - [ ] Parallelize im2col/col2im and the `Conv2d` reorder loops across goroutines
+   - [ ] SIMD kernels, or Apple Accelerate / OpenBLAS for `MatMul`
+   - [ ] Strided views (zero-copy `Transpose`, `Slice`, `Expand`)
+   - [ ] GPU backends (Metal, CUDA)
+3. **More layers and ops**
+   - [ ] `BatchNorm`, `Embedding`, `AvgPool2d`
+   - [ ] Batched `MatMul`, `Concat`, slicing
+   - [ ] Attention / transformer blocks
+4. **Ecosystem**
+   - [ ] Named `state_dict`-style checkpoints
+   - [ ] More datasets (Fashion-MNIST, CIFAR-10)
+
+Done:
+
+- [x] Autograd engine, broadcasting, `Linear`, `SGD`, `Adam`
+- [x] `DataLoader` with Go iterators, model save/load, MNIST example
 - [x] `Conv2d`, `MaxPool2d`, `Dropout`, train/eval modes
-- [ ] `BatchNorm`, `Embedding`, `AvgPool2d`
-- [ ] SIMD / BLAS backend, then GPU (Metal, CUDA)
-- [x] `DataLoader`, model save/load, MNIST example
